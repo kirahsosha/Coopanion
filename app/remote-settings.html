@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>远程后端设置</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; padding: 18px 20px 16px;
+    font: 14px system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #f4f5f4; color: #2b2b2e;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #0e1113; color: #d7dbde; } }
+  h1 { font-size: 15px; margin: 0 0 4px; }
+  p.hint { margin: 0 0 14px; font-size: 12px; opacity: .65; line-height: 1.5; }
+  label.row { display: block; margin: 0 0 10px; }
+  label.row > span { display: block; font-size: 12px; opacity: .7; margin-bottom: 4px; }
+  input[type=text], input[type=number] {
+    width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 7px;
+    border: 1px solid rgba(128,128,128,.45); background: transparent; color: inherit; font: inherit;
+  }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .check { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+  .check input { width: 16px; height: 16px; }
+  #status { font-size: 12px; margin: 12px 0 0; padding: 8px 10px; border-radius: 7px; background: rgba(128,128,128,.12); white-space: pre-wrap; }
+  .bar { display: flex; gap: 8px; margin-top: 16px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid rgba(128,128,128,.45); background: transparent; color: inherit; cursor: pointer; }
+  button.primary { background: #4a6cf7; border-color: #4a6cf7; color: #fff; }
+  button:active { transform: translateY(1px); }
+</style>
+<h1>远程后端</h1>
+<p class="hint">
+  开启后本机不再启动 Core，桌宠窗口直接连 NAS 上的服务。<br>
+  隧道由应用自己管理（<code>ssh -N -L …</code>），退出应用即断开。
+</p>
+
+<div class="check">
+  <input type="checkbox" id="enabled"><label for="enabled">启用远程后端（下次启动也生效）</label>
+</div>
+
+<div class="two">
+  <label class="row"><span>NAS 主机</span><input type="text" id="sshHost" placeholder="192.168.0.107"></label>
+  <label class="row"><span>SSH 端口</span><input type="number" id="sshPort" placeholder="10039"></label>
+</div>
+<div class="two">
+  <label class="row"><span>SSH 用户名</span><input type="text" id="sshUser" placeholder="17521049530"></label>
+  <label class="row"><span>私钥路径（留空用交互认证）</span><input type="text" id="keyPath" placeholder="C:\...\coo_nas_key"></label>
+</div>
+<div class="two">
+  <label class="row"><span>远端桌宠端口</span><input type="number" id="remotePetPort" placeholder="17788"></label>
+  <label class="row"><span>本机隧道端口</span><input type="number" id="localPort" placeholder="7788"></label>
+</div>
+
+<div class="check">
+  <input type="checkbox" id="forwardNapcat"><label for="forwardNapcat">同时转发 NapCat WebUI</label>
+</div>
+<label class="row"><span>NapCat WebUI 端口</span><input type="number" id="napcatPort" placeholder="6099"></label>
+
+<div class="check">
+  <input type="checkbox" id="consoleEnabled"><label for="consoleEnabled">转发 NAS 控制台（模型 / 世界 / 提示词 / 日志）</label>
+</div>
+<label class="row"><span>控制台端口</span><input type="number" id="consolePort" placeholder="17790"></label>
+
+<div class="check">
+  <input type="checkbox" id="autostart"><label for="autostart">开机自启（登录后自动连 NAS 并出桌宠）</label>
+</div>
+
+<div id="status">状态：读取中…</div>
+
+<div class="bar">
+  <button class="primary" id="save">保存并重连</button>
+  <button id="reload">重新连接</button>
+  <button id="quit">退出应用</button>
+</div>
+
+<script>
+  const { ipcRenderer } = require('electron');
+  const $ = (id) => document.getElementById(id);
+  const FIELDS = ['sshHost','sshPort','sshUser','keyPath','remotePetPort','localPort','napcatPort','consolePort'];
+  const FLAGS = ['enabled','forwardNapcat','consoleEnabled'];
+
+  async function fill() {
+    const cfg = await ipcRenderer.invoke('remote:read');
+    for (const k of FIELDS) $(k).value = cfg[k] ?? '';
+    for (const k of FLAGS) $(k).checked = Boolean(cfg[k]);
+    $('autostart').checked = await ipcRenderer.invoke('remote:autostart:get');
+  }
+
+  $('autostart').onchange = async () => {
+    await ipcRenderer.invoke('remote:autostart:set', $('autostart').checked);
+  };
+
+  async function showStatus() {
+    const s = await ipcRenderer.invoke('remote:status');
+    const lines = [
+      `隧道：${s.tunnel ? '已连接' : '未连接'}`,
+      `桌宠窗口：${s.pet ? '已打开' : '未打开'}`,
+      `地址：${s.url}`,
+    ];
+    if (s.consoleUrl) lines.push(`NAS 控制台：${s.consoleUrl}`);
+    if (s.error) lines.push(`最近错误：${s.error}`);
+    $('status').textContent = lines.join('\n');
+  }
+
+  $('save').onclick = async () => {
+    const patch = {};
+    for (const k of FIELDS) {
+      const v = $(k).value.trim();
+      patch[k] = k.endsWith('Port') || k.endsWith('localhost') ? Number(v) || 0 : v;
+    }
+    for (const k of FLAGS) patch[k] = $(k).checked;
+    await ipcRenderer.invoke('remote:write', patch);
+    setTimeout(showStatus, 300);
+  };
+  $('reload').onclick = () => { ipcRenderer.send('remote:reload'); setTimeout(showStatus, 300); };
+  $('quit').onclick = () => ipcRenderer.send('remote:quit');
+
+  fill().then(showStatus);
+  setInterval(showStatus, 2000);
+</script>
+</html>

@@ -42,6 +42,9 @@ const { Readable } = require('node:stream');
 const { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } = require('node:fs');
 const { delimiter, dirname, extname, join, resolve, sep } = require('node:path');
 const { dataDirIn, locateData, readRecord, writeRecord } = require('./data-dir.cjs');
+// P1: 远程后端模式。remote.json 里 enabled 为 true 时本进程不启动 Core，
+// 只负责 ssh 隧道 + 桌宠窗口（见 app/remote.cjs）。
+const remoteMode = require('./remote.cjs');
 
 const MAC = process.platform === 'darwin';
 const LINUX = process.platform === 'linux';
@@ -611,6 +614,8 @@ ipcMain.on('settings:language', (e) => { e.returnValue = language; });
 ipcMain.on('settings:update', (e) => { e.returnValue = { auto: SELF_UPDATE, step: updateLine() }; });
 
 app.whenReady().then(() => {
+  // P1: 远程后端模式下不启动本机 Core，托盘/桌宠/隧道都由 remote.cjs 接管。
+  if (remoteMode.start({ dataDir: DATA, iconsDir: ICONS, windowIcon: WINDOW_ICON, loginName: LOGIN_NAME, loginArgs: LOGIN_ARGS })) return;
   const settingsSession = session.fromPartition(SETTINGS_PARTITION);
   settingsSession.protocol.handle('http', serveWindow);
   keepRemoteOut(settingsSession);
