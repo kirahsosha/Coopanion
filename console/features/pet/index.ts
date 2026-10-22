@@ -33,7 +33,7 @@ const GROUP = 'world:desktop-pet';
 const SOUND_GROUP = 'world:desktop-pet:sound';
 const STATS_GROUP = 'companion';
 const STATS_KEY = 'companion.telemetry';
-const STATS_DOC = 'https://github.com/Pal-AI-Lab/Coopanion/blob/main/docs/TELEMETRY.md';
+const STATS_DOC = 'https://github.com/kirahsosha/Coopanion/blob/main/docs/TELEMETRY.md';
 /** The app language: a key of the `companion` group, its choices from the Core. */
 const LANGUAGE_KEY = 'language';
 const LANGUAGE_OPTIONS = '/api/config/options/coopanion.language';

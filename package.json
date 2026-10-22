@@ -1,12 +1,12 @@
 {
   "name": "coopanion",
   "productName": "Coopanion",
-  "version": "0.2.5",
+  "version": "0.2.5-1",
   "private": true,
   "description": "A desktop companion built on Cortico: a pet on your screen that talks, listens and can operate the computer",
   "license": "AGPL-3.0-or-later",
-  "author": "Pal-AI-Lab",
-  "homepage": "https://github.com/Pal-AI-Lab/Coopanion",
+  "author": "kirahsosha",
+  "homepage": "https://github.com/kirahsosha/Coopanion",
   "type": "module",
   "main": "app/main.cjs",
   "packageManager": "pnpm@11.28.6",
@@ -57,5 +57,12 @@
     "tar-stream": "3.2.1",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kirahsosha/Coopanion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kirahsosha/Coopanion/issues"
   }
 }

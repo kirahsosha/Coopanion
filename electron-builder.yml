@@ -2,7 +2,7 @@
 # macOS disk image and zip for the architecture of the Mac it is built on, or a Linux AppImage and deb.
 appId: ai.pal.coopanion
 productName: Coopanion
-copyright: Copyright © 2026 Pal-AI-Lab
+copyright: Copyright © 2026 kirahsosha
 electronVersion: 44.4.4
 directories:
   app: build/app
@@ -17,7 +17,7 @@ files:
 # latest-linux.yml next to the installers (and app-update.yml into the app), which the release workflow uploads
 publish:
   provider: github
-  owner: Pal-AI-Lab
+  owner: kirahsosha
   repo: Coopanion
 win:
   target:

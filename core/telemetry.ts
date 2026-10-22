@@ -23,7 +23,8 @@ import { cpus, release, totalmem } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const TELEMETRY_URL = 'https://survey.palailab.org/v1/report';
+// fork: 置空即不再上报（sendOnce 里有守卫）
+export const TELEMETRY_URL = '';
 /** How often the day's record goes out while the app runs. */
 const SEND_MS = 30 * 60_000;
 /** Running time is counted in whole minutes. */
@@ -349,6 +350,7 @@ export class Telemetry {
   }
 
   private async sendOnce(): Promise<void> {
+    if (!this.url) return; // fork: 没有上报地址就什么都不发
     this.syncEnabled();
     const enabled = this.state.enabled;
     if (enabled) this.rollDay();

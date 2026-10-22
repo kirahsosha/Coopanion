@@ -14,7 +14,7 @@ const { app } = require('electron');
 const { createWriteStream, mkdirSync } = require('node:fs');
 const { dirname, join } = require('node:path');
 
-const RELEASES_URL = 'https://github.com/Pal-AI-Lab/Coopanion/releases/latest';
+const RELEASES_URL = 'https://github.com/kirahsosha/Coopanion/releases/latest';
 /** Releases come out at most a few times a day; a run left open for days still hears of them the same day. */
 const CHECK_EVERY_MS = 6 * 3600_000;
 
