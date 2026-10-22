@@ -34,6 +34,8 @@ const DEFAULTS = {
   napcatPort: 6099,
   /** NapCat WebUI 的 token：填了就能免手输直接进控制台（只存本机 remote.json） */
   napcatToken: '',
+  /** NAS 上 NapCat 的 webui.json 路径；打开控制台前会读它校正 token（普通 SSH 用户可读） */
+  napcatConfigPath: '/data_n005/coopanion/napcat/config/webui.json',
   /** 转发 NAS 上 Core 自带的 Web 控制台（模型/世界/提示词/日志都在里面） */
   consoleEnabled: true,
   /** 控制台隧道端口，两端同号（NAS 侧由 compose 的 console-relay 发布到 17790） */
@@ -108,25 +110,69 @@ function petUrl(cfg) {
 
 /* ------------------------------- 隧道 ------------------------------- */
 
-function sshArgs(cfg) {
+/** 隧道与"跑一条远程命令"共用的连接参数（不含目的地）。 */
+function sshBase(cfg) {
   const args = [
-    '-N',
     '-o', 'StrictHostKeyChecking=accept-new',
-    '-o', 'ExitOnForwardFailure=yes',
     '-o', 'ServerAliveInterval=30',
     '-o', 'ServerAliveCountMax=3',
+    '-o', 'ConnectTimeout=8',
   ];
   if (cfg.keyPath && existsSync(cfg.keyPath)) {
     args.push('-i', cfg.keyPath, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes');
   }
-  args.push('-p', String(cfg.sshPort), '-L', `${cfg.localPort}:127.0.0.1:${cfg.remotePetPort}`);
+  args.push('-p', String(cfg.sshPort));
+  return args;
+}
+
+function sshTarget(cfg) {
+  return `${cfg.sshUser}@${cfg.sshHost}`;
+}
+
+/**
+ * 从 NAS 读 NapCat 当前的 WebUI token。
+ * QQ 重新扫码登录后 NapCat 会刷新 token，存着的那份就过期了 —— 这里每次开控制台前校一次。
+ * webui.json 权限是 644，普通 SSH 用户就能读，不需要 sudo。
+ * @returns {Promise<string|null>}
+ */
+function readNapcatToken(cfg) {
+  const path = cfg.napcatConfigPath || '/data_n005/coopanion/napcat/config/webui.json';
+  return new Promise((resolve) => {
+    let out = '';
+    let child;
+    try {
+      child = spawn('ssh', [...sshBase(cfg), sshTarget(cfg), `cat ${path}`], {
+        windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+    const done = (value) => { clearTimeout(timer); resolve(value); };
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* 已退出 */ } resolve(null); }, 10000);
+    child.stdout.on('data', (chunk) => { out += chunk; });
+    child.on('error', () => done(null));
+    child.on('close', () => {
+      try {
+        const token = JSON.parse(out).token;
+        done(typeof token === 'string' && token ? token : null);
+      } catch {
+        done(null);
+      }
+    });
+  });
+}
+
+function sshArgs(cfg) {
+  const args = ['-N', '-o', 'ExitOnForwardFailure=yes', ...sshBase(cfg)];
+  args.push('-L', `${cfg.localPort}:127.0.0.1:${cfg.remotePetPort}`);
   // 桌宠服务本身（装扮页 / 预览页用）：World 上报的是它自己的 127.0.0.1:7797
   if (cfg.petServicePort && cfg.petServicePort !== cfg.localPort) {
     args.push('-L', `${cfg.petServicePort}:127.0.0.1:${cfg.remotePetPort}`);
   }
   if (cfg.forwardNapcat) args.push('-L', `${cfg.napcatPort}:127.0.0.1:${cfg.napcatPort}`);
   if (cfg.consoleEnabled) args.push('-L', `${cfg.consolePort}:127.0.0.1:${cfg.consolePort}`);
-  args.push(`${cfg.sshUser}@${cfg.sshHost}`);
+  args.push(sshTarget(cfg));
   return args;
 }
 
@@ -380,9 +426,18 @@ function napcatUrl(cfg = readCfg()) {
   return cfg.napcatToken ? `${base}?token=${encodeURIComponent(cfg.napcatToken)}` : base;
 }
 
-/** NapCat 的 QQ 协议端控制台（登录态、账号、连接参数都在里面）。 */
-function openNapcat() {
+/**
+ * 打开前先跟 NAS 校一次 token：QQ 扫码重登后 NapCat 会刷新它，
+ * 本地存的那份就会失效（表现为一直要求输密码/页面打不开）。
+ */
+async function openNapcat() {
   const cfg = readCfg();
+  const fresh = await readNapcatToken(cfg);
+  if (fresh && fresh !== cfg.napcatToken) {
+    cfg.napcatToken = fresh;
+    writeCfg({ napcatToken: fresh });
+    log('napcat token refreshed from NAS');
+  }
   const url = napcatUrl(cfg);
   if (napcatWin && !napcatWin.isDestroyed()) {
     napcatWin.loadURL(url);
@@ -477,8 +532,14 @@ function init(options) {
   ipcMain.on('remote:quit', () => app.quit());
   ipcMain.on('remote:restart', () => { app.relaunch(); app.exit(0); });
   ipcMain.on('remote:open', () => openSettings());
-  ipcMain.on('remote:napcat', () => { openNapcat(); });
+  ipcMain.on('remote:napcat', () => { void openNapcat(); });
   ipcMain.handle('remote:napcat-url', () => napcatUrl());
+  // 手动"从 NAS 读一次 token"：读不到返回 null（页面上提示检查 SSH 配置）
+  ipcMain.handle('remote:napcat-token', async () => {
+    const token = await readNapcatToken(readCfg());
+    if (token) { writeCfg({ napcatToken: token }); log('napcat token read on demand'); }
+    return token;
+  });
   ipcMain.handle('remote:status', () => status());
   ipcMain.handle('remote:read', () => readCfg());
   ipcMain.handle('remote:write', (_e, patch) => {

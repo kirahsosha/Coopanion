@@ -56,6 +56,7 @@
 </div>
 <label class="row"><span>NapCat WebUI 端口</span><input type="number" id="napcatPort" placeholder="6099"></label>
 <label class="row"><span>NapCat token（填了就免手输，只存本机）</span><input type="password" id="napcatToken" placeholder="留空则打开时手工输入" autocomplete="off"></label>
+<label class="row"><span>NAS 上 webui.json 的路径（用于自动校正 token）</span><input type="text" id="napcatConfigPath" placeholder="/data_n005/coopanion/napcat/config/webui.json"></label>
 
 <div class="check">
   <input type="checkbox" id="consoleEnabled"><label for="consoleEnabled">转发 NAS 控制台（模型 / 世界 / 提示词 / 日志）</label>
@@ -72,13 +73,14 @@
   <button class="primary" id="save">保存并重连</button>
   <button id="reload">重新连接</button>
   <button id="napcat">打开 NapCat WebUI</button>
+  <button id="readtoken">从 NAS 读 token</button>
   <button id="quit">退出应用</button>
 </div>
 
 <script>
   const { ipcRenderer } = require('electron');
   const $ = (id) => document.getElementById(id);
-  const FIELDS = ['sshHost','sshPort','sshUser','keyPath','remotePetPort','localPort','napcatPort','napcatToken','consolePort','petServicePort'];
+  const FIELDS = ['sshHost','sshPort','sshUser','keyPath','remotePetPort','localPort','napcatPort','napcatToken','napcatConfigPath','consolePort','petServicePort'];
   const FLAGS = ['enabled','forwardNapcat','consoleEnabled'];
 
   async function fill() {
@@ -128,6 +130,18 @@
   };
   // 先存再开：免得刚输入的 token 还没落盘就用旧值打开
   $('napcat').onclick = async () => { await saveCfg(); ipcRenderer.send('remote:napcat'); };
+  // 手动从 NAS 读一次 token（QQ 扫码重登后 NapCat 会刷新它）
+  $('readtoken').onclick = async () => {
+    const saved = await saveCfg();
+    const token = await ipcRenderer.invoke('remote:napcat-token');
+    if (token) {
+      $('napcatToken').value = token;
+      $('status').textContent += `\n\n已从 NAS 读到 token（长度 ${token.length}）`;
+    } else {
+      $('status').textContent += '\n\n读取失败：检查 SSH 主机/密钥，或 webui.json 路径是否正确';
+    }
+    void saved;
+  };
   $('reload').onclick = () => { ipcRenderer.send('remote:reload'); setTimeout(showStatus, 300); };
   $('quit').onclick = () => ipcRenderer.send('remote:quit');
 
