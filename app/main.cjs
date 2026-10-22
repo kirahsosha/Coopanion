@@ -273,7 +273,9 @@ const updateLine = () => updateStep && { phase: updateStep.phase, version: updat
 let language = 'en';
 const T = () => textOf(language);
 
-const consoleUrl = (path = '') => (core.port ? `http://127.0.0.1:${core.port}/${path}` : null);
+/** 当前生效的控制台端口：远程后端模式下是隧道端口，否则是本机 Core 的端口。 */
+const activePort = () => remoteMode.consolePort() ?? core.port;
+const consoleUrl = (path = '') => (activePort() ? `http://127.0.0.1:${activePort()}/${path}` : null);
 /** The settings window's page; `path` is a hash route such as `#/dress`. */
 const settingsUrl = (path = '') => consoleUrl(`coopanion/${path}`);
 
@@ -304,7 +306,7 @@ const WINDOW_DIR = join(APP_ROOT, 'build', 'console');
 const WINDOW_PREFIX = '/coopanion/';
 const WINDOW_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.map': 'application/json' };
 const refused = () => new Response(null, { status: 403 });
-const coreOrigin = () => (core.port ? `http://127.0.0.1:${core.port}` : null);
+const coreOrigin = () => (activePort() ? `http://127.0.0.1:${activePort()}` : null);
 /** The desktop-pet World's server, as its panel reports it; asked again when a request names another origin. */
 let petOrigin = null;
 async function learnPetOrigin() {
@@ -364,7 +366,7 @@ function forward(request, url, origin) {
 }
 
 /** The only remote address the settings page asks: the latest Coopanion release, for the hint under the wordmark. */
-const RELEASE_CHECK = 'https://api.github.com/repos/Pal-AI-Lab/Coopanion/releases/latest';
+const RELEASE_CHECK = 'https://api.github.com/repos/kirahsosha/Coopanion/releases/latest';
 /** Images of the extension market: package icons and screenshots of the official index, and GitHub avatars. */
 const MARKET_IMAGES = ['https://raw.githubusercontent.com/Pal-AI-Lab/cortico-extensions/', 'https://avatars.githubusercontent.com/'];
 const isLocal = (url) => /^(https?|wss?):\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//.test(url);
@@ -615,14 +617,21 @@ ipcMain.on('settings:update', (e) => { e.returnValue = { auto: SELF_UPDATE, step
 
 app.whenReady().then(() => {
   // P1: 远程后端模式下不启动本机 Core，托盘/桌宠/隧道都由 remote.cjs 接管。
-  if (remoteMode.start({ dataDir: DATA, iconsDir: ICONS, windowIcon: WINDOW_ICON, loginName: LOGIN_NAME, loginArgs: LOGIN_ARGS })) return;
   const settingsSession = session.fromPartition(SETTINGS_PARTITION);
   settingsSession.protocol.handle('http', serveWindow);
   keepRemoteOut(settingsSession);
   app.setAppUserModelId(APP_ID);
+  language = configuredLanguage(join(userData, 'home')) ?? systemLanguage(app);
+
+  // P1: 远程后端模式下不启动本机 Core；托盘、桌宠、隧道交给 remote.cjs，
+  // 但设置窗口照常可用 —— 它的 API 请求经 serveWindow 转给 NAS 的控制台端口。
+  if (remoteMode.start({
+    dataDir: DATA, iconsDir: ICONS, windowIcon: WINDOW_ICON,
+    loginName: LOGIN_NAME, loginArgs: LOGIN_ARGS, openSettings,
+  })) return;
+
   const system = systemLanguage(app);
   core.opts.env.COOPANION_SYSTEM_LANGUAGE = system;
-  language = configuredLanguage(join(userData, 'home')) ?? system;
   if (askStranded && askRestoreStranded()) return;
   // figure packs from the Workshop: more pack directories for the desktop-pet World (core/companion.ts)
   if (STEAM) core.opts.env.COOPANION_PACK_ROOTS = require('./steam.cjs').workshopPackRoots(BUILD.steamAppId, join(userData, 'logs')).join(delimiter);

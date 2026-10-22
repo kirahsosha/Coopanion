@@ -49,6 +49,7 @@
   <label class="row"><span>远端桌宠端口</span><input type="number" id="remotePetPort" placeholder="17788"></label>
   <label class="row"><span>本机隧道端口</span><input type="number" id="localPort" placeholder="7788"></label>
 </div>
+<label class="row"><span>桌宠服务端口（装扮页 / 预览页要它，通常 7797）</span><input type="number" id="petServicePort" placeholder="7797"></label>
 
 <div class="check">
   <input type="checkbox" id="forwardNapcat"><label for="forwardNapcat">同时转发 NapCat WebUI</label>
@@ -75,7 +76,7 @@
 <script>
   const { ipcRenderer } = require('electron');
   const $ = (id) => document.getElementById(id);
-  const FIELDS = ['sshHost','sshPort','sshUser','keyPath','remotePetPort','localPort','napcatPort','consolePort'];
+  const FIELDS = ['sshHost','sshPort','sshUser','keyPath','remotePetPort','localPort','napcatPort','consolePort','petServicePort'];
   const FLAGS = ['enabled','forwardNapcat','consoleEnabled'];
 
   async function fill() {

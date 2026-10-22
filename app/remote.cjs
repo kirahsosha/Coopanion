@@ -36,6 +36,11 @@ const DEFAULTS = {
   consoleEnabled: true,
   /** 控制台隧道端口，两端同号（NAS 侧由 compose 的 console-relay 发布到 17790） */
   consolePort: 17790,
+  /**
+   * 桌宠服务端口。装扮页 / 桌宠预览是桌宠 World 自己的页面，World 上报的地址是
+   * 它视角的 127.0.0.1:7797 —— 要在本机打开，就得把 7797 也转到 NAS 的桌宠 relay。
+   */
+  petServicePort: 7797,
 };
 
 let cfgPath = '';
@@ -48,6 +53,18 @@ let consoleWin = null;
 let stopping = false;
 let lastError = '';
 let tunnelRetry = null;
+/** 主题（main.cjs）用的控制台端口：远程模式下指向隧道，不启用时为 null。 */
+let currentConsolePort = null;
+/** 本次运行是否已经从 World 那里核对过桌宠服务端口。 */
+let portLearned = false;
+/** 由 main.cjs 注入：原版设置窗口（它自己会用 activePort() 走隧道）。 */
+let openSettingsWindow = null;
+let started = false;
+
+/** main.cjs 的 serveWindow/设置窗口靠它决定把请求发到哪个端口。 */
+function consolePort() {
+  return started && currentConsolePort ? currentConsolePort : null;
+}
 
 /* ------------------------------- 配置 ------------------------------- */
 
@@ -84,6 +101,10 @@ function sshArgs(cfg) {
     args.push('-i', cfg.keyPath, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes');
   }
   args.push('-p', String(cfg.sshPort), '-L', `${cfg.localPort}:127.0.0.1:${cfg.remotePetPort}`);
+  // 桌宠服务本身（装扮页 / 预览页用）：World 上报的是它自己的 127.0.0.1:7797
+  if (cfg.petServicePort && cfg.petServicePort !== cfg.localPort) {
+    args.push('-L', `${cfg.petServicePort}:127.0.0.1:${cfg.remotePetPort}`);
+  }
   if (cfg.forwardNapcat) args.push('-L', `${cfg.napcatPort}:127.0.0.1:${cfg.napcatPort}`);
   if (cfg.consoleEnabled) args.push('-L', `${cfg.consolePort}:127.0.0.1:${cfg.consolePort}`);
   args.push(`${cfg.sshUser}@${cfg.sshHost}`);
@@ -182,13 +203,38 @@ function scheduleReadyRetry() {
 }
 
 /**
+ * 问 NAS 上的桌宠 World 要它自己的地址（`pet/state` 返回 `url` / `dressUrl`），
+ * 从中取出真实端口。装扮页与预览页用的就是这个地址，写死迟早会对不上。
+ * @returns 端口号；拿不到时 null（调用方保留配置里的值当兜底）。
+ */
+async function learnPetServicePort(cfg) {
+  if (!cfg.consoleEnabled) return null;
+  const panel = `http://127.0.0.1:${cfg.consolePort}/api/webui/providers/${encodeURIComponent('world:desktop-pet')}/panels/pet/state`;
+  try {
+    const res = await fetch(panel, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ args: [] }), signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    const reported = body?.url ?? body?.data?.url ?? null;
+    if (typeof reported !== 'string') return null;
+    const port = Number(new URL(reported).port);
+    return Number.isFinite(port) && port > 0 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @param reset 操作者手动触发（托盘「重新连接」）时为 true：重置退避并重开隧道。
  */
 async function reconnect(reset = false) {
   const cfg = readCfg();
-  if (!cfg.enabled) return;
+  if (!cfg.enabled) { currentConsolePort = null; return; }
+  currentConsolePort = cfg.consoleEnabled ? cfg.consolePort : null;
   clearReadyRetry();
-  if (reset) { readyDelay = 5000; killTunnel(); }
+  if (reset) { readyDelay = 5000; portLearned = false; killTunnel(); }
   killPet();
 
   // 隧道还活着就别重开，只再探一次远端（NAS 慢启动时的常态）
@@ -200,6 +246,28 @@ async function reconnect(reset = false) {
     scheduleReadyRetry();
     return;
   }
+
+  // 端口自愈：World 上报的桌宠服务端口和本地隧道端口不一致时，改配置并重开一次隧道。
+  // 只在拉起桌宠窗口之前做，避免窗口先连上再被掐。
+  if (!portLearned) {
+    portLearned = true;
+    const actual = await learnPetServicePort(cfg);
+    if (actual && actual !== cfg.petServicePort) {
+      writeCfg({ petServicePort: actual });
+      killTunnel();
+      const next = readCfg();
+      if (startTunnel(next) && (await waitReady(url, 10000))) {
+        readyDelay = 5000;
+        spawnPet(url);
+        lastError = '';
+        refreshTray();
+        return;
+      }
+      scheduleReadyRetry();
+      return;
+    }
+  }
+
   readyDelay = 5000;
   spawnPet(url);
   lastError = '';
@@ -236,7 +304,9 @@ function refreshTray() {
     { type: 'separator' },
     // NAS 上 Core 自带的 Web 控制台：模型 / 世界 / 提示词 / 日志 / 存储都在里面
     { label: '打开 NAS 控制台', enabled: Boolean(s.tunnel && cfg.consoleEnabled), click: () => openConsole() },
-    { label: '远程后端设置…', click: () => openSettings() },
+    // 原版设置窗口（build/console）：远程模式下它的请求经隧道打到 NAS 的 Core
+    { label: 'Coopanion 设置…', enabled: Boolean(s.tunnel && cfg.consoleEnabled), click: () => openSettingsWindow?.() },
+    { label: '远程连接设置…', click: () => openSettings() },
     { type: 'separator' },
     {
       label: '开机自启', type: 'checkbox', checked: autostartGet(), enabled: process.platform !== 'linux',
@@ -329,8 +399,10 @@ function start(options) {
   iconsDir = options.iconsDir;
   loginName = options.loginName;
   if (Array.isArray(options.loginArgs)) loginArgs = options.loginArgs;
+  openSettingsWindow = typeof options.openSettings === 'function' ? options.openSettings : null;
   const cfg = readCfg();
   if (!cfg.enabled) return false;
+  started = true;
 
   stopping = false;
   app.on('before-quit', () => { stopping = true; clearReadyRetry(); killTunnel(); killPet(); });
@@ -360,4 +432,4 @@ function start(options) {
   return true;
 }
 
-module.exports = { start };
+module.exports = { start, consolePort };
