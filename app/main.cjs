@@ -512,6 +512,8 @@ function refreshTray() {
     { label: t.trayShowPet, enabled: core.state === 'running', click: () => void showPet() },
     { type: 'separator' },
     { label: t.trayLaunchAtLogin, type: 'checkbox', checked: login, enabled: app.isPackaged, click: (item) => { loginItem.set(item.checked); noteAutostart(); refreshTray(); } },
+    // 本机模式下同样要能进远程后端设置，否则勾掉之后只能手改 remote.json
+    { label: '远程后端设置…', click: () => remoteMode.openSettings() },
     { label: t.trayRestart, click: () => void core.restart() },
     { label: t.trayQuit, click: () => app.quit() },
   ]));

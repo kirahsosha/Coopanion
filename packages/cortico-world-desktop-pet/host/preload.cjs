@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('petHost', {
   /** Whether the window hides itself while a fullscreen window covers its display. */
   hideWhenFullscreen: (on) => ipcRenderer.send('pet:hideWhenFullscreen', !!on),
   openDress: () => ipcRenderer.send('pet:openDress'),
+  /** 远程后端：设置窗口在同一台机器的另一个进程里，由它开（见 host/electron-main.cjs）。 */
+  openSettings: () => ipcRenderer.send('pet:openSettings'),
+  /** 是否连的远程后端（决定设置窗口由谁打开）。 */
+  isRemote: () => ipcRenderer.sendSync('pet:isRemote'),
   /** The app language the page shows, for the window process's own words (the tray menu). */
   setLanguage: (code) => ipcRenderer.send('pet:language', String(code)),
   /** How far the window reaches below the floor (over a taskbar), in page pixels, each time it is placed. */

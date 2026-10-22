@@ -32,6 +32,8 @@ const DEFAULTS = {
   /** 同时把 NapCat WebUI 也转发出来（浏览器开 http://127.0.0.1:<napcatPort>/webui） */
   forwardNapcat: false,
   napcatPort: 6099,
+  /** NapCat WebUI 的 token：填了就能免手输直接进控制台（只存本机 remote.json） */
+  napcatToken: '',
   /** 转发 NAS 上 Core 自带的 Web 控制台（模型/世界/提示词/日志都在里面） */
   consoleEnabled: true,
   /** 控制台隧道端口，两端同号（NAS 侧由 compose 的 console-relay 发布到 17790） */
@@ -43,6 +45,15 @@ const DEFAULTS = {
   petServicePort: 7797,
 };
 
+/**
+ * 改动这些字段才需要重连（重建隧道 / 重开桌宠窗口）。
+ * token、开机自启之类不在其中 —— 改个 token 不该把桌宠关掉重开。
+ */
+const TUNNEL_KEYS = [
+  'sshHost', 'sshPort', 'sshUser', 'keyPath', 'localPort', 'remotePetPort',
+  'consolePort', 'consoleEnabled', 'petServicePort', 'forwardNapcat', 'napcatPort',
+];
+
 let cfgPath = '';
 let iconsDir = '';
 let tunnel = null;
@@ -50,6 +61,7 @@ let pet = null;
 let tray = null;
 let settingsWin = null;
 let consoleWin = null;
+let napcatWin = null;
 let stopping = false;
 let lastError = '';
 let tunnelRetry = null;
@@ -64,6 +76,13 @@ let started = false;
 /** main.cjs 的 serveWindow/设置窗口靠它决定把请求发到哪个端口。 */
 function consolePort() {
   return started && currentConsolePort ? currentConsolePort : null;
+}
+
+/** 诊断日志：<DATA>/logs/remote.log（只记远程后端自己的事，不碰 Core 的日志） */
+function log(line) {
+  try {
+    require('node:fs').appendFileSync(join(cfgPath, '..', 'logs', 'remote.log'), `${new Date().toISOString()} ${line}\n`);
+  } catch { /* 日志失败不影响功能 */ }
 }
 
 /* ------------------------------- 配置 ------------------------------- */
@@ -145,10 +164,23 @@ function startTunnel(cfg) {
 
 /* ------------------------------ 桌宠窗口 ---------------------------- */
 
+/**
+ * 关掉桌宠窗口。必须杀**整棵进程树**：Electron 的 renderer/GPU 是它的子进程，
+ * 只 kill 主进程会留下一堆孤儿（表现为"又出现一个桌宠 + 残留后台进程"）。
+ */
 function killPet() {
   if (!pet) return;
-  try { pet.kill(); } catch { /* 已经退出 */ }
+  const pid = pet.pid;
   pet = null;
+  if (!pid) return;
+  try {
+    if (process.platform === 'win32') {
+      // /T 连子进程一起杀，/F 强制；spawnSync 保证在拉起新窗口之前已经杀干净
+      require('node:child_process').spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    } else {
+      process.kill(pid, 'SIGKILL');
+    }
+  } catch { /* 已经退出 */ }
 }
 
 function spawnPet(url) {
@@ -306,6 +338,8 @@ function refreshTray() {
     { label: '打开 NAS 控制台', enabled: Boolean(s.tunnel && cfg.consoleEnabled), click: () => openConsole() },
     // 原版设置窗口（build/console）：远程模式下它的请求经隧道打到 NAS 的 Core
     { label: 'Coopanion 设置…', enabled: Boolean(s.tunnel && cfg.consoleEnabled), click: () => openSettingsWindow?.() },
+    // QQ 协议端控制台：登录态、账号、连接参数；token 已带在 URL 里
+    { label: '打开 NapCat WebUI', enabled: Boolean(s.tunnel && cfg.forwardNapcat), click: () => openNapcat() },
     { label: '远程连接设置…', click: () => openSettings() },
     { type: 'separator' },
     {
@@ -335,6 +369,35 @@ function openConsole() {
   });
   consoleWin.loadURL(url);
   consoleWin.on('closed', () => { consoleWin = null; });
+}
+
+/**
+ * NapCat 的 WebUI 地址。它的页面本身不校验 token（由前端读 URL 后存起来），
+ * 所以把 token 拼进 query 就能免手输直接进控制台。
+ */
+function napcatUrl(cfg = readCfg()) {
+  const base = `http://127.0.0.1:${cfg.napcatPort}/webui/`;
+  return cfg.napcatToken ? `${base}?token=${encodeURIComponent(cfg.napcatToken)}` : base;
+}
+
+/** NapCat 的 QQ 协议端控制台（登录态、账号、连接参数都在里面）。 */
+function openNapcat() {
+  const cfg = readCfg();
+  const url = napcatUrl(cfg);
+  if (napcatWin && !napcatWin.isDestroyed()) {
+    napcatWin.loadURL(url);
+    napcatWin.show();
+    napcatWin.focus();
+    return url;
+  }
+  napcatWin = new BrowserWindow({
+    width: 1120, height: 800, title: 'NapCat WebUI',
+    autoHideMenuBar: true, backgroundColor: '#f4f5f4',
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+  });
+  napcatWin.loadURL(url);
+  napcatWin.on('closed', () => { napcatWin = null; });
+  return url;
 }
 
 function buildTray() {
@@ -394,12 +457,72 @@ function autostartSet(on) {
 
 /* -------------------------------- 导出 ------------------------------ */
 
-function start(options) {
+let inited = false;
+
+/**
+ * 无论是否启用远程模式都要跑：注册 IPC、记住配置路径。
+ * 本机模式（enabled: false）下托盘里仍然要能打开「远程后端设置」，否则勾掉之后
+ * 就再也进不去了 —— 只能手改 remote.json。
+ */
+function init(options) {
+  if (inited) return;
+  inited = true;
   cfgPath = join(options.dataDir, 'remote.json');
   iconsDir = options.iconsDir;
   loginName = options.loginName;
   if (Array.isArray(options.loginArgs)) loginArgs = options.loginArgs;
   openSettingsWindow = typeof options.openSettings === 'function' ? options.openSettings : null;
+
+  ipcMain.on('remote:reload', () => { void reconnect(true); });
+  ipcMain.on('remote:quit', () => app.quit());
+  ipcMain.on('remote:restart', () => { app.relaunch(); app.exit(0); });
+  ipcMain.on('remote:open', () => openSettings());
+  ipcMain.on('remote:napcat', () => { openNapcat(); });
+  ipcMain.handle('remote:napcat-url', () => napcatUrl());
+  ipcMain.handle('remote:status', () => status());
+  ipcMain.handle('remote:read', () => readCfg());
+  ipcMain.handle('remote:write', (_e, patch) => {
+    const before = readCfg();
+    const next = writeCfg(patch);
+    // 模式切换（本机 ⇄ 远程）只能在启动时决定，写进配置后必须重启才生效
+    const needRestart = started ? !next.enabled : Boolean(next.enabled);
+    // 只有动到隧道/端口的字段才重连；否则会把好好的桌宠关掉重开一个
+    const tunnelChanged = TUNNEL_KEYS.some((k) => String(before[k] ?? '') !== String(next[k] ?? ''));
+    const reconnected = Boolean(started && next.enabled && tunnelChanged);
+    if (reconnected) void reconnect(true);
+    refreshTray();
+    return { cfg: next, needRestart, reconnected };
+  });
+  ipcMain.handle('remote:autostart:get', () => autostartGet());
+  ipcMain.handle('remote:autostart:set', (_e, on) => { const v = autostartSet(on); refreshTray(); return v; });
+}
+
+/**
+ * 监听宿主进程写来的「打开设置」信号文件（桌宠齿轮）。
+ * 用文件而不是再拉起一个进程：点一次只多一次 writeFileSync，不会留下残留进程。
+ * 用轮询而不是 fs.watch：Windows 上的目录监听不够可靠，500ms 一次 stat 的成本可以忽略。
+ */
+function watchOpenRequest(dataDir) {
+  const file = join(dataDir, '.open-settings.req');
+  let last = 0;
+  log(`watcher start: ${file}`);
+  setInterval(() => {
+    try {
+      if (!existsSync(file)) return;
+      const now = Date.now();
+      if (now - last < 800) return;
+      last = now;
+      try { require('node:fs').rmSync(file, { force: true }); } catch { /* 删不掉不影响打开 */ }
+      log('gear request detected → opening settings');
+      (openSettingsWindow ?? openSettings)();
+    } catch (err) {
+      log(`watcher error: ${err && err.message ? err.message : String(err)}`);
+    }
+  }, 500).unref();
+}
+
+function start(options) {
+  init(options);
   const cfg = readCfg();
   if (!cfg.enabled) return false;
   started = true;
@@ -407,18 +530,10 @@ function start(options) {
   stopping = false;
   app.on('before-quit', () => { stopping = true; clearReadyRetry(); killTunnel(); killPet(); });
 
-  ipcMain.on('remote:reload', () => { void reconnect(true); });
-  ipcMain.on('remote:quit', () => app.quit());
-  ipcMain.handle('remote:status', () => status());
-  ipcMain.handle('remote:read', () => readCfg());
-  ipcMain.handle('remote:write', (_e, patch) => {
-    const next = writeCfg(patch);
-    if (next.enabled) void reconnect();
-    refreshTray();
-    return next;
-  });
-  ipcMain.handle('remote:autostart:get', () => autostartGet());
-  ipcMain.handle('remote:autostart:set', (_e, on) => { const v = autostartSet(on); refreshTray(); return v; });
+  // 桌宠的齿轮：远程模式下由宿主进程再拉起一次主程序来通知我们
+  // （见 world 包的 host/electron-main.cjs 里的 pet:openSettings）
+  watchOpenRequest(options.dataDir);
+  app.on('second-instance', () => { (openSettingsWindow ?? openSettings)(); });
 
   buildTray();
   void reconnect();
@@ -432,4 +547,4 @@ function start(options) {
   return true;
 }
 
-module.exports = { start, consolePort };
+module.exports = { init, start, consolePort, openSettings };

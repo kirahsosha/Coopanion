@@ -457,6 +457,27 @@ function runPetHost({ url, parentPid = 0, tray: withTray = true }) {
   ipcMain.on('pet:hideWhenFullscreen', (_e, on) => { hideWhenFullscreen = !!on; });
   ipcMain.on('pet:watchWindows', (_e, on) => watchWindows(!!on));
   ipcMain.on('pet:openDress', () => openDress());
+// 齿轮：远程后端模式下设置窗口在客户端这一侧，拉起主程序（第二实例）让它打开。
+// 本地模式返回，仍由 Core 的 ctx.openSettings() 处理。
+ipcMain.on('pet:isRemote', (e) => {
+  try {
+    const data = process.env.CORTICO_COMPANION_DATA || require('node:path').join(require('node:path').dirname(process.execPath), 'data');
+    const cfg = JSON.parse(require('node:fs').readFileSync(require('node:path').join(data, 'remote.json'), 'utf8'));
+    e.returnValue = !!(cfg && cfg.enabled === true);
+  } catch { e.returnValue = false; }
+});
+ipcMain.on('pet:openSettings', () => {
+  try {
+    const data = process.env.CORTICO_COMPANION_DATA || require('node:path').join(require('node:path').dirname(process.execPath), 'data');
+    const cfg = JSON.parse(require('node:fs').readFileSync(require('node:path').join(data, 'remote.json'), 'utf8'));
+    if (!cfg || cfg.enabled !== true) return;
+  } catch { return; }
+  // 写信号文件通知正在运行的主进程（比再拉起一个 Electron 实例轻，也不留残留进程）
+  try {
+    const data = process.env.CORTICO_COMPANION_DATA || require('node:path').join(require('node:path').dirname(process.execPath), 'data');
+    require('node:fs').writeFileSync(require('node:path').join(data, '.open-settings.req'), String(Date.now()));
+  } catch { /* 主进程没在跑就算了 */ }
+});
   let language = 'zh';
   ipcMain.on('pet:language', (_e, code) => {
     if (typeof code !== 'string' || code === language) return;

@@ -55,6 +55,7 @@
   <input type="checkbox" id="forwardNapcat"><label for="forwardNapcat">同时转发 NapCat WebUI</label>
 </div>
 <label class="row"><span>NapCat WebUI 端口</span><input type="number" id="napcatPort" placeholder="6099"></label>
+<label class="row"><span>NapCat token（填了就免手输，只存本机）</span><input type="password" id="napcatToken" placeholder="留空则打开时手工输入" autocomplete="off"></label>
 
 <div class="check">
   <input type="checkbox" id="consoleEnabled"><label for="consoleEnabled">转发 NAS 控制台（模型 / 世界 / 提示词 / 日志）</label>
@@ -70,13 +71,14 @@
 <div class="bar">
   <button class="primary" id="save">保存并重连</button>
   <button id="reload">重新连接</button>
+  <button id="napcat">打开 NapCat WebUI</button>
   <button id="quit">退出应用</button>
 </div>
 
 <script>
   const { ipcRenderer } = require('electron');
   const $ = (id) => document.getElementById(id);
-  const FIELDS = ['sshHost','sshPort','sshUser','keyPath','remotePetPort','localPort','napcatPort','consolePort','petServicePort'];
+  const FIELDS = ['sshHost','sshPort','sshUser','keyPath','remotePetPort','localPort','napcatPort','napcatToken','consolePort','petServicePort'];
   const FLAGS = ['enabled','forwardNapcat','consoleEnabled'];
 
   async function fill() {
@@ -93,6 +95,7 @@
   async function showStatus() {
     const s = await ipcRenderer.invoke('remote:status');
     const lines = [
+      `模式：${s.enabled ? '远程后端（连 NAS）' : '本机（未启用远程）'}`,
       `隧道：${s.tunnel ? '已连接' : '未连接'}`,
       `桌宠窗口：${s.pet ? '已打开' : '未打开'}`,
       `地址：${s.url}`,
@@ -102,16 +105,29 @@
     $('status').textContent = lines.join('\n');
   }
 
-  $('save').onclick = async () => {
+  async function saveCfg() {
     const patch = {};
     for (const k of FIELDS) {
       const v = $(k).value.trim();
       patch[k] = k.endsWith('Port') || k.endsWith('localhost') ? Number(v) || 0 : v;
     }
     for (const k of FLAGS) patch[k] = $(k).checked;
-    await ipcRenderer.invoke('remote:write', patch);
-    setTimeout(showStatus, 300);
+    return ipcRenderer.invoke('remote:write', patch);
+  }
+
+  $('save').onclick = async () => {
+    const res = await saveCfg();
+    await showStatus();
+    if (res?.needRestart) {
+      const go = confirm('远程后端模式已改变，需要重启应用才能生效。\n\n现在重启吗？\n（选「取消」可以稍后从托盘退出再手动启动）');
+      if (go) ipcRenderer.send('remote:restart');
+    } else if (!res?.reconnected) {
+      // 没有动到隧道/端口：不重连，避免把好好的桌宠关掉重开
+      $('status').textContent += '\n\n已保存：没有需要重连的改动（桌宠保持原样）';
+    }
   };
+  // 先存再开：免得刚输入的 token 还没落盘就用旧值打开
+  $('napcat').onclick = async () => { await saveCfg(); ipcRenderer.send('remote:napcat'); };
   $('reload').onclick = () => { ipcRenderer.send('remote:reload'); setTimeout(showStatus, 300); };
   $('quit').onclick = () => ipcRenderer.send('remote:quit');
 

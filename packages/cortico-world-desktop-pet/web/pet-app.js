@@ -1229,7 +1229,10 @@ function renderMenuHead(confirmQuit = false) {
   // only the controls the embedding app lent; a server without `buttons` lends all three
   const has = bot.buttons ?? { pause: true, settings: true, quit: true };
   if (has.pause) act(bot.paused ? ICONS.play : ICONS.pause, t(bot.paused ? 'menu.resume' : 'menu.pause'), () => send({ t: 'control', action: bot.paused ? 'resume' : 'pause' }), `m-act run${bot.paused ? ' paused' : ''}`);
-  if (has.settings) act(ICONS.settings, t('menu.settings'), () => { closeMenu(); send({ t: 'control', action: 'settings' }); });
+  if (has.settings) act(ICONS.settings, t('menu.settings'), () => { closeMenu();
+    // 远程后端：设置窗口在客户端这一侧，只通知宿主；本地模式仍由 Core 打开
+    if (host?.isRemote?.()) host.openSettings?.();
+    else send({ t: 'control', action: 'settings' }); });
   if (has.quit) act(ICONS.power, bot.quitLabel, () => renderMenuHead(true), 'm-act power');
 }
 function closeMenu() { menu.hidden = true; }
